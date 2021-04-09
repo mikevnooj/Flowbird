@@ -29,8 +29,11 @@ vmh_daily <- GetVMH(VMH_StartTime = VMH_StartTime)
 
 # clean -------------------------------------------------------------------
 
-vmh_daily <- tidyr::separate(vmh_daily, Time, c("Date", "ClockTime"), sep=" ", remove=FALSE)
-avail_null_data <- tidyr::separate(avail_null_data, generated_at, c("Date", "ClockTime"), sep=" ", remove=FALSE)
+
+vmh_daily <- tidyr::separate(vmh_daily, Time, c("Date", "A_ClockTime"), sep=" ", remove=FALSE)
+
+#f_time for later join
+avail_null_data <- tidyr::separate(avail_null_data, generated_at, c("Date", "F_ClockTime"), sep=" ", remove=FALSE)
 
 
 vmh_daily <- as.data.table(vmh_daily)
@@ -38,27 +41,27 @@ avail_null_data <- as.data.table(avail_null_data)
 setnames(avail_null_data, "vehicle_id", "Vehicle_ID")
 
 
+# Transit_Day -------------------------------------------------------------
+
 Transit_Day_Cutoff <- as.ITime("03:30:00")
 
 
 vmh_daily[, DateTest := fifelse(data.table::as.ITime(ClockTime) < Transit_Day_Cutoff, 1, 0) #test the days
-          ][, Transit_Day := fifelse(DateTest == 1, #set the days
-                                    lubridate::as_date(Date) - 1,
-                                    lubridate::as_date(Date))
-            ][, Transit_Day := lubridate::as_date("1970-01-01") + lubridate::days(Transit_Day)#convert the days
-              ][
-                ,dt_td_test := fifelse(
-                  DateTest == 1
-                  ,data.table::as.IDate(Date)-1
-                  ,data.table::as.IDate(Date)
-                )
-              ]
+          ][, Transit_Day := fifelse(
+            DateTest == 1
+            ,data.table::as.IDate(Date)-1
+            ,data.table::as.IDate(Date)
+          )
+            ]
 
 all(vmh_daily$Transit_Day == vmh_daily$dt_td_test)
 
+vmh_daily$jointime <- vmhdaily$ClockTime
+avail_null_data$ClockTime
 
 
 setkey(vmh_daily,join_time,Vehicle_ID)
 setkey(avail_null_data,join_time,Vehicle_ID)
+
 
 null_data <- vmh_daily[avail_null_data,roll = T,rollends=c(T,T)]
