@@ -59,7 +59,7 @@ fb_ridership_2020[
                                                         , "Wednesday"
                                                         , "Thursday"
                                                         , "Friday"
-                         )#end c
+                                                        )#end c
                          , "Weekday"
                          , weekdays(Transit_Day) == "Saturday"
                          , "Saturday"
@@ -521,6 +521,27 @@ merge.data.table(ips[`Program Id` %in% c(13
 
 
 # IPS Jan/Feb Analysis ----------------------------------------------------
+library(leaflet)
+library(ggplot)
+library(data.table)
+library(timeDate)
+library(magrittr)
+
+x <- fread("data//tableau_validations_20190901_to_20210405.csv")
+
+#get everything that counts as ridership
+fb_ridership <- x[
+  !is.na(`Media Id`)
+  ][
+    Result == 1
+    ][
+      , Time := lubridate::mdy_hms(`Date (Local TIme)`)
+      ][order(Time)
+        ][!`Device External Id` %like% "ATB"]
+
+
+
+#rm(list = setdiff(ls(),"VMH_Raw"))
 #get dates
 start_date <- as.POSIXct("2020/01/01", tz = "UTC")
 end_date <- as.POSIXct("2020/03/01", tz = "UTC")
@@ -532,7 +553,21 @@ fb_ridership[, .N
                  )
              ][order(`Program Id`)]
 
+#do transit day
 
+Transit_Day_Cutoff <- as.ITime("03:30:00")
+
+
+fb_ridership[, DateTest := fifelse(data.table::as.ITime(Time) < Transit_Day_Cutoff
+                                   , 1
+                                   , 0
+                                   ) #end fifelse()
+             ][
+               , Transit_Day := fifelse(DateTest == 1
+                                        , data.table::as.IDate(Time)-1
+                                        , data.table::as.IDate(Time)
+                                        )
+               ]
 
 # okay we're looking for 4,5,6,10,11,12,13,18,19,20,33,34,37,39
 
@@ -544,7 +579,20 @@ fb_ridership_ips <- fb_ridership[Transit_Day >= start_date&
 
 fb_ridership_ips[,jointime := fasttime::fastPOSIXct(Time, tz = "UTC")]
 
-setnames(fb_ridership_ips, c("Vehicle External Id","Latitude","Longitude"), c("Vehicle_ID","fb_lat","fb_lon"))
+setnames(fb_ridership_ips
+         , c("Vehicle External Id"
+             , "Latitude"
+             , "Longitude"
+             # , "Media Id"
+             # , "Line Id"
+             )
+         , c("Vehicle_ID"
+             , "fb_lat"
+             , "fb_lon"
+             # , "Media_Id"
+             # , "Line_Id"
+             )
+         )
 
 setkey(fb_ridership_ips, Vehicle_ID, Transit_Day, jointime)
 
@@ -596,32 +644,32 @@ con_rep <- DBI::dbConnect(odbc::odbc()
 VMH_StartTime <- stringr::str_remove_all(start_date,"-")
 VMH_EndTime <- stringr::str_remove_all(end_date,"-")
 
-#paste0 the query
-VMH_Raw <- dplyr::tbl(
-  con_rep, dplyr::sql(
-    paste0(
-      "select a.Time
-    ,a.Route
-    ,Trip
-    ,Boards
-    ,Alights
-    ,Onboard
-    ,Vehicle_ID
-    ,Stop_Name
-    ,Stop_Id
-    ,Latitude
-    ,Longitude
-    ,GPSStatus
-    ,Previous_Stop_Id
-    from avl.Vehicle_Message_History a (nolock)
-    left join avl.Vehicle_Avl_History b
-    on a.Avl_History_Id = b.Avl_History_Id
-    where a.Time > '",VMH_StartTime,"'
-    and a.Time < DATEADD(day,1,'",VMH_EndTime,"')"
-    )#end paste
-  )#endsql
-) %>% #end tbl
-  dplyr::collect()
+# #paste0 the query
+# VMH_Raw <- dplyr::tbl(
+#   con_rep, dplyr::sql(
+#     paste0(
+#       "select a.Time
+#     ,a.Route
+#     ,Trip
+#     ,Boards
+#     ,Alights
+#     ,Onboard
+#     ,Vehicle_ID
+#     ,Stop_Name
+#     ,Stop_Id
+#     ,Latitude
+#     ,Longitude
+#     ,GPSStatus
+#     ,Previous_Stop_Id
+#     from avl.Vehicle_Message_History a (nolock)
+#     left join avl.Vehicle_Avl_History b
+#     on a.Avl_History_Id = b.Avl_History_Id
+#     where a.Time > '",VMH_StartTime,"'
+#     and a.Time < DATEADD(day,1,'",VMH_EndTime,"')"
+#     )#end paste
+#   )#endsql
+# ) %>% #end tbl
+#   dplyr::collect()
 
 gc()
 
@@ -677,7 +725,7 @@ rolljointable_ips <- VMH_Raw[Transit_Day >= start_date &
                 fb_Time = `Date (Local TIme)`,
                 jointime,
                 Vehicle_ID,
-                everything())
+                dplyr::everything())
 
 #set max times
 #
@@ -773,11 +821,13 @@ DimStop <- dplyr::tbl(con_dw
 
 DimStop_just_one <- DimStop[DimStop[,.I[which.max(StopKey)],StopExternalID]$V1]
 
-DimStop[StopDesc %ilike% "Meridian St & 11"]
+
 # Crispus Attucks Stops ---------------------------------------------------
 #program Id is 13
 #weekday service type
 #stops are 50902, 51059, 51260
+#all filtered for weekday service
+zero_b_a_vehicles <- VMH_Raw[, sum(Boards), .(Vehicle_ID, Transit_Day)][V1 == 0]
 
 Crispus_stops <- c(50902
                    , 51059
@@ -794,30 +844,281 @@ Crispus_stops <- c(50902
                    , 50005
                    )
 
+Crispus_bell_time <- as.ITime("14:10")
 
-DimStop_just_one[StopExternalID %in% Crispus_stops] %>%
-leaflet::leaflet() %>%
-leaflet::addCircles() %>%
-leaflet::addTiles()
+Crispus_Marker <- leaflet::awesomeIcons(icon = "ios-close"
+                                        , iconColor = "green"
+                                        , library = "ion"
+                                        , markerColor = "black"
+                                        )
 
-DimStop_just_one[StopExternalID %in% Crispus_stops] %>%
+#map
+Crispus_stop_map <- DimStop_just_one[StopExternalID %in% Crispus_stops] %>%
   leaflet::leaflet() %>%
-  leaflet::addCircles() %>%
-  leaflet::addTiles()
+  leaflet::addCircles(color = "blue"
+                      , opacity = 1000) %>%
+  leaflet::addAwesomeMarkers(lng = -86.1692
+                             , lat = 39.7828
+                             , icon = Crispus_Marker
+                             ) %>%
+  leaflet::addProviderTiles(leaflet::providers$Stamen.Toner
+                            , options = leaflet::providerTileOptions(opacity = .35)
+                            )
+######### RENAME HERE 
+htmlwidgets::saveWidget(Crispus_stop_map , file = "Crispus_stop_map.html")
+
+#okay lets get some background info
+#how many unique users are there
+#get rid of questionable and get weekdays only and get rid of bad longitude
+#map to check
+
+Crispus_dt <- rolljoin_one_each_ips[Service_Type == "Weekday" &
+                                      `Program Id` == 13 &
+                                      Longitude < -77.03
+                                    ][!fb_Questionable_ips, on = c("Validation Id")
+                                      ][,`:=` (Media_Id = `Media Id`
+                                               , Line_Id = `Line Id`
+                                               , Line_Name = `Line Name`
+                                               , Program_Name = `Program Name`
+                                               )
+                                        ][]
 
 
-rolljoin_one_each_ips[`Program Id` == 13
-                      ][#filter some wacky shit in australia
-                        Longitude < -77.03
-                        ] %>%
-leaflet::leaflet() %>%
-leaflet::addCircles() %>%
-leaflet::addTiles()
-  
-  
+Crispus_pct_valid <- nrow(Crispus_dt)/nrow(rolljoin_one_each_ips[Service_Type == "Weekday" &
+                                                                   `Program Id` == 13]
+                                           )
+Crispus_pct_valid
 
-  
+Crispus_unique_users <- Crispus_dt[,uniqueN(Media_Id)
+                                   ]
+
+Crispus_usage_per_user <- Crispus_dt[,.N
+                                     ,Media_Id
+                                     ]
+
+#graph that usage per user
+Crispus_ordered_usage_plot <- Crispus_usage_per_user[order(-N)] %>%
+  ggplot(aes(x = reorder(as.character(Media_Id)
+                         ,-N)
+             , y = N
+             )
+         ) +
+  geom_col()
+
+Crispus_ordered_usage_plot
+ggsave("Crispus_ordered_usage_plot.png")
+
+#okay now let's get median and average swipes (?) per hour
+#we'll have to group by day and by hour?
+#create hour dt
+hourseq_start <- Crispus_dt[, lubridate::floor_date(min(jointime)
+                                                    , unit = "hour"
+                                                    )
+                            ]
+
+hourseq_end <- Crispus_dt[, lubridate::floor_date(max(jointime)
+                                                  , unit = "hour"
+                                                  )
+                          ]
+
+hourseq <- data.table(time = seq(hourseq_start
+                                 , hourseq_end
+                                 , by="hour"
+                                 )
+                      )
+
+#Transit_Day
+hourseq[, DateTest := fifelse(data.table::as.ITime(time) < Transit_Day_Cutoff
+                              , 1
+                              , 0
+                              )
+        ][, Transit_Day := fifelse(DateTest == 1
+                                   , data.table::as.IDate(time)-1
+                                   , data.table::as.IDate(time)
+                                   )
+          ][,hour := hour(time)
+            ][,`:=`(time = NULL
+                    , DateTest = NULL
+                    )
+              ]
+
+hour_count <- hourseq[, .(number_of_hours = .N)
+                      , hour
+                      ]
+
+#okay now we have all hours
+#so we need to count boardings by Transit_day and hour in crispus_dt
+Crispus_by_hour_day <- Crispus_dt[,.(Boards = .N)
+                                  ,.(Transit_Day
+                                     ,hour(jointime)
+                                     )
+                                  ][order(Transit_Day
+                                          ,hour
+                                          )
+                                    ]
+
+Crispus_median_by_hour <- Crispus_by_hour_day[, .(median = median(Boards))
+                                              , hour
+                                              ]
+
+Crispus_by_hour <- Crispus_dt[, .(Boards = .N
+                                  ,days_with_boardings = uniqueN(Transit_Day)
+                                  )
+                              , hour(jointime)
+                              ]
+
+Crispus_average_by_hour <- merge.data.table(x = hour_count
+                                            , y = Crispus_by_hour
+                                            , by = "hour"
+                                            , all.x = TRUE
+                                            )
+
+Crispus_average_by_hour[,`:=`(Boards = nafill(Boards
+                                              , type = "const"
+                                              , fill = 0
+                                              )
+                              , days_with_boardings = nafill(days_with_boardings
+                                                             , type = "const"
+                                                             , fill = 0)
+                              )
+                        ][,avg := Boards/number_of_hours]
 
 
+Crispus_summary <- merge.data.table(x = Crispus_average_by_hour
+                                    , y = Crispus_median_by_hour
+                                    , all.x = TRUE
+                                    )[,median := nafill(median
+                                                        , type = "const"
+                                                        , fill = 0
+                                                        )
+                                      ]
 
-RANN::nn2()
+
+odd <- seq(1,24,2)
+
+Crispus_fb_both_plot <- melt(Crispus_summary 
+                             , id.vars = c("hour")
+                             , measure.vars = c("avg"
+                                                ,"median"
+                                                )
+                             ) %>%
+  ggplot(aes(x = hour
+             , y = value
+             , fill = variable
+             )
+         ) +
+  geom_bar(stat = "identity"
+           , position = "dodge") +
+  theme_minimal() +
+  labs(y = "boardings"
+       , x = "hour") + 
+  scale_x_continuous(breaks = Crispus_summary[,unique(hour)][odd]
+                     , labels = Crispus_summary[,paste0(unique(hour)
+                                                        , ":00"
+                                                        )
+                                                ][odd]
+                     ) +
+  theme(axis.text.x = element_text(angle = 305))+
+  geom_vline(xintercept = hour(Crispus_bell_time)
+             ,colour = "black"
+             ,size = 2
+             ,alpha = .8)
+
+
+ggsave("Crispus_fb_both_plot.png")
+
+Crispus_fb_median_plot <- Crispus_summary %>% 
+  ggplot(aes(x = hour
+             )
+         ) +
+  geom_col(aes(y = median)
+           ) +
+  theme_minimal() +
+  labs(y = "median boardings"
+       , x = "hour") + 
+  scale_x_continuous(breaks = Crispus_summary[,unique(hour)][odd]
+                     , labels = Crispus_summary[,paste0(unique(hour)
+                                                        , ":00"
+                                                        )
+                                                ][odd]
+                     ) +
+  theme(axis.text.x = element_text(angle = 305))+
+  geom_vline(xintercept = hour(Crispus_bell_time)
+             ,colour = "orange"
+             ,size = 2
+             ,alpha = .5)
+
+ggsave("Crispus_fb_median_plot.png")
+
+Crispus_fb_avg_plot <- Crispus_summary %>% 
+  ggplot(aes(x = hour
+             )
+         ) +
+  geom_col(aes(y = avg)
+           ) +
+  theme_minimal() +
+  labs(y = "avg boardings"
+       , x = "hour") + 
+  scale_x_continuous(breaks = Crispus_summary[,unique(hour)][odd]
+                     , labels = Crispus_summary[,paste0(unique(hour)
+                                                        , ":00"
+                                                        )
+                                                ][odd]
+                     ) +
+  theme(axis.text.x = element_text(angle = 305))+
+  geom_vline(xintercept = hour(Crispus_bell_time)
+             ,colour = "orange"
+             ,size = 2
+             ,alpha = .5)
+
+ggsave("Crispus_fb_avg_plot.png")
+# now do onboards ---------------------------------------------------------
+
+Crispus_stops_VMH <- VMH_Raw[Stop_Id %in% Crispus_stops & 
+                               Time > hourseq_start & 
+                               Time < hourseq_end
+                             ][!zero_b_a_vehicles
+                               , on = c("Vehicle_ID"
+                                        ,"Transit_Day"
+                                        )
+                               ]
+
+
+Crispus_stops_median_onboard <- Crispus_stops_VMH[, .(median = median(Onboard)
+                                                      )
+                                                  , .(hour(Time)
+                                                      , Stop_Id = as.character(Stop_Id))
+                                                  ] %>% 
+  merge.data.table(DimStop_just_one
+                   , by.x = "Stop_Id"
+                   , by.y = "StopExternalID"
+                   )
+
+Crispus_stops_bell_time_onboard <- Crispus_stops_VMH[hour(Time) == hour(Crispus_bell_time)
+                                                     ][,Stop_Id := as.character(Stop_Id)
+                                                       ] %>%
+  merge.data.table(DimStop_just_one
+                   , by.x = "Stop_Id"
+                   , by.y = "StopExternalID"
+                   )
+
+
+Crispus_vmh_median_plot <- Crispus_stops_median_onboard %>%
+  ggplot(aes(x = hour)) +
+  geom_col(aes(y = median))+
+  geom_vline(xintercept = hour(Crispus_bell_time)
+             ,colour = "orange"
+             ,size = 2
+             ,alpha = .5) +
+  facet_wrap(~StopReportLabel)
+
+ggsave("Crispus_vmh_median_plot.png")
+
+Crispus_onboard_bell_time_plot <- Crispus_stops_bell_time_onboard %>%
+  ggplot(aes(x = Onboard)) +
+  geom_histogram(binwidth = 1) +
+  facet_wrap(~StopReportLabel)
+
+ggsave("Crispus_onboard_bell_time_plot.png")
+
+
