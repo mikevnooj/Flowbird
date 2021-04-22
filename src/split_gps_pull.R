@@ -526,7 +526,7 @@ library(ggplot)
 library(data.table)
 library(timeDate)
 library(magrittr)
-
+rm(list = setdiff(ls(),"VMH_Raw"))
 x <- fread("data//tableau_validations_20190901_to_20210405.csv")
 
 #get everything that counts as ridership
@@ -541,7 +541,7 @@ fb_ridership <- x[
 
 
 
-#rm(list = setdiff(ls(),"VMH_Raw"))
+
 #get dates
 start_date <- as.POSIXct("2020/01/01", tz = "UTC")
 end_date <- as.POSIXct("2020/03/01", tz = "UTC")
@@ -829,24 +829,18 @@ DimStop_just_one <- DimStop[DimStop[,.I[which.max(StopKey)],StopExternalID]$V1]
 #all filtered for weekday service
 zero_b_a_vehicles <- VMH_Raw[, sum(Boards), .(Vehicle_ID, Transit_Day)][V1 == 0]
 
-school_program_id <- 13
+school_program_id <- 10
 
-Crispus_stops <- c(50902
-                   , 51059
-                   , 50901
-                   , 51260
-                   , 51347
-                   , 10143
-                   , 50390
-                   , 14207
-                   , 50905
-                   , 51056
-                   , 12108
-                   , 12112
-                   , 50005
+Crispus_stops <- c(70018
+                   , 70019
+                   , 52227
+                   , 52419
+                   , 10100
+                   , 10260
+                   , 51834
                    )
 
-Crispus_bell_time <- as.ITime("14:10")
+Crispus_bell_time <- as.ITime("15:50")
 
 Crispus_Marker <- leaflet::awesomeIcons(icon = "ios-close"
                                         , iconColor = "green"
@@ -859,20 +853,19 @@ Crispus_stop_map <- DimStop_just_one[StopExternalID %in% Crispus_stops] %>%
   leaflet::leaflet() %>%
   leaflet::addCircles(color = "blue"
                       , opacity = 1000) %>%
-  leaflet::addAwesomeMarkers(lng = -86.1692
-                             , lat = 39.7828
+  leaflet::addAwesomeMarkers(lng = -86.1552
+                             , lat = 39.8181
                              , icon = Crispus_Marker
                              ) %>%
   leaflet::addProviderTiles(leaflet::providers$Stamen.Toner
                             , options = leaflet::providerTileOptions(opacity = .35)
                             )
 ######### RENAME HERE 
-htmlwidgets::saveWidget(Crispus_stop_map , file = "Crispus_stop_map.html")
+htmlwidgets::saveWidget(Crispus_stop_map , file = "SR_stop_map.html")
 
 #okay lets get some background info
 #how many unique users are there
 #get rid of questionable and get weekdays only and get rid of bad longitude
-#map to check
 
 Crispus_dt <- rolljoin_one_each_ips[Service_Type == "Weekday" &
                                       `Program Id` == school_program_id &
@@ -887,12 +880,14 @@ Crispus_dt <- rolljoin_one_each_ips[Service_Type == "Weekday" &
 
 
 Crispus_pct_valid <- nrow(Crispus_dt)/nrow(rolljoin_one_each_ips[Service_Type == "Weekday" &
-                                                                   `Program Id` == 13]
+                                                                   `Program Id` == school_program_id]
                                            )
 Crispus_pct_valid
 
 Crispus_unique_users <- Crispus_dt[,uniqueN(Media_Id)
                                    ]
+
+Crispus_unique_users
 
 Crispus_usage_per_user <- Crispus_dt[,.N
                                      ,Media_Id
@@ -908,7 +903,7 @@ Crispus_ordered_usage_plot <- Crispus_usage_per_user[order(-N)] %>%
   geom_col()
 
 Crispus_ordered_usage_plot
-ggsave("Crispus_ordered_usage_plot.png")
+ggsave("SR_ordered_usage_plot.png")
 
 #okay now let's get median and average swipes (?) per hour
 #we'll have to group by day and by hour?
@@ -1026,8 +1021,9 @@ Crispus_fb_both_plot <- melt(Crispus_summary
              ,size = 2
              ,alpha = .8)
 
+Crispus_fb_both_plot
 
-ggsave("Crispus_fb_both_plot.png")
+ggsave("SR_fb_both_plot.png")
 
 Crispus_fb_median_plot <- Crispus_summary %>% 
   ggplot(aes(x = hour
@@ -1050,7 +1046,9 @@ Crispus_fb_median_plot <- Crispus_summary %>%
              ,size = 2
              ,alpha = .5)
 
-ggsave("Crispus_fb_median_plot.png")
+Crispus_fb_median_plot
+
+ggsave("SR_fb_median_plot.png")
 
 Crispus_fb_avg_plot <- Crispus_summary %>% 
   ggplot(aes(x = hour
@@ -1073,7 +1071,9 @@ Crispus_fb_avg_plot <- Crispus_summary %>%
              ,size = 2
              ,alpha = .5)
 
-ggsave("Crispus_fb_avg_plot.png")
+Crispus_fb_avg_plot
+
+ggsave("SH_fb_avg_plot.png")
 # now do onboards ---------------------------------------------------------
 
 Crispus_stops_VMH <- VMH_Raw[Stop_Id %in% Crispus_stops & 
@@ -1114,13 +1114,18 @@ Crispus_vmh_median_plot <- Crispus_stops_median_onboard %>%
              ,alpha = .5) +
   facet_wrap(~StopReportLabel)
 
-ggsave("Crispus_vmh_median_plot.png")
+Crispus_vmh_median_plot
+
+ggsave("SR_vmh_median_plot.png")
 
 Crispus_onboard_bell_time_plot <- Crispus_stops_bell_time_onboard %>%
   ggplot(aes(x = Onboard)) +
   geom_histogram(binwidth = 1) +
-  facet_wrap(~StopReportLabel)
+  facet_wrap(~StopReportLabel) +
+  xlim(c(0,100))
 
-ggsave("Crispus_onboard_bell_time_plot.png")
+Crispus_onboard_bell_time_plot
+
+ggsave("SR_onboard_bell_time_plot.png")
 
 
