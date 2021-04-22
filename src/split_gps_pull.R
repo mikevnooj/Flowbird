@@ -829,6 +829,8 @@ DimStop_just_one <- DimStop[DimStop[,.I[which.max(StopKey)],StopExternalID]$V1]
 #all filtered for weekday service
 zero_b_a_vehicles <- VMH_Raw[, sum(Boards), .(Vehicle_ID, Transit_Day)][V1 == 0]
 
+school_program_id <- 13
+
 Crispus_stops <- c(50902
                    , 51059
                    , 50901
@@ -873,7 +875,7 @@ htmlwidgets::saveWidget(Crispus_stop_map , file = "Crispus_stop_map.html")
 #map to check
 
 Crispus_dt <- rolljoin_one_each_ips[Service_Type == "Weekday" &
-                                      `Program Id` == 13 &
+                                      `Program Id` == school_program_id &
                                       Longitude < -77.03
                                     ][!fb_Questionable_ips, on = c("Validation Id")
                                       ][,`:=` (Media_Id = `Media Id`
