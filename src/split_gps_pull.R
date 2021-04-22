@@ -14,6 +14,9 @@ fb_ridership <- x[
         ][order(Time)
             ][!`Device External Id` %like% "ATB"]
 
+
+
+
 #do transit day
 
 Transit_Day_Cutoff <- as.ITime("03:30:00")
@@ -515,3 +518,306 @@ merge.data.table(ips[`Program Id` %in% c(13
 ,all.y = T
 ,by = c("Transit_Day","hour")
 )
+
+
+# IPS Jan/Feb Analysis ----------------------------------------------------
+#get dates
+start_date <- as.POSIXct("2020/01/01", tz = "UTC")
+end_date <- as.POSIXct("2020/03/01", tz = "UTC")
+
+# find ips programs
+fb_ridership[, .N
+             , .(`Program Id`
+                 , `Program Name`
+                 )
+             ][order(`Program Id`)]
+
+
+
+# okay we're looking for 4,5,6,10,11,12,13,18,19,20,33,34,37,39
+
+ips_programs <- c(4,5,6,10,11,12,13,18,19,20,33,34,37,39)
+
+fb_ridership_ips <- fb_ridership[Transit_Day >= start_date& 
+                                    Transit_Day < end_date & 
+                                   `Program Id` %in% ips_programs]
+
+fb_ridership_ips[,jointime := fasttime::fastPOSIXct(Time, tz = "UTC")]
+
+setnames(fb_ridership_ips, c("Vehicle External Id","Latitude","Longitude"), c("Vehicle_ID","fb_lat","fb_lon"))
+
+setkey(fb_ridership_ips, Vehicle_ID, Transit_Day, jointime)
+
+#set service type
+holidays_sunday_service <- c("USNewYearsDay", "USMemorialDay",
+                             "USIndependenceDay", "USLaborDay",
+                             "USThanksgivingDay", "USChristmasDay")
+
+holidays_saturday_service <- c("USMLKingsBirthday")
+
+#set sat sun
+holidays_sunday <- holiday(2000:2025, holidays_sunday_service)
+holidays_saturday <- holiday(2000:2025, holidays_saturday_service)
+
+#set service type column
+fb_ridership_ips[
+  ,Service_Type := fcase(Transit_Day %in% as.IDate(holidays_saturday@Data)
+                         , "Saturday"
+                         , Transit_Day %in% as.IDate(holidays_sunday@Data)
+                         , "Sunday"
+                         , weekdays(Transit_Day) %in% c("Monday"
+                                                        , "Tuesday"
+                                                        , "Wednesday"
+                                                        , "Thursday"
+                                                        , "Friday"
+                         )#end c
+                         , "Weekday"
+                         , weekdays(Transit_Day) == "Saturday"
+                         , "Saturday"
+                         ,weekdays(Transit_Day) == "Sunday"
+                         , "Sunday"
+  )#end fcase 
+  ]
+
+
+# pull vmh for ips --------------------------------------------------------
+
+con_rep <- DBI::dbConnect(odbc::odbc()
+                         , Driver = "SQL Server"
+                         , Server = "REPSQLP01VW\\REPSQLP02"
+                         , Database = "TransitAuthority_IndyGo_Reporting"
+                         , Port = 1433)
+
+#we'll need these for our query of the database
+#VMH_StartTime <- start_date + (60*60*3)
+# get start time in yyyymmdd with no spaces
+
+
+VMH_StartTime <- stringr::str_remove_all(start_date,"-")
+VMH_EndTime <- stringr::str_remove_all(end_date,"-")
+
+#paste0 the query
+VMH_Raw <- dplyr::tbl(
+  con_rep, dplyr::sql(
+    paste0(
+      "select a.Time
+    ,a.Route
+    ,Trip
+    ,Boards
+    ,Alights
+    ,Onboard
+    ,Vehicle_ID
+    ,Stop_Name
+    ,Stop_Id
+    ,Latitude
+    ,Longitude
+    ,GPSStatus
+    ,Previous_Stop_Id
+    from avl.Vehicle_Message_History a (nolock)
+    left join avl.Vehicle_Avl_History b
+    on a.Avl_History_Id = b.Avl_History_Id
+    where a.Time > '",VMH_StartTime,"'
+    and a.Time < DATEADD(day,1,'",VMH_EndTime,"')"
+    )#end paste
+  )#endsql
+) %>% #end tbl
+  dplyr::collect()
+
+gc()
+
+
+#set the DT and keys
+setDT(VMH_Raw)
+
+
+
+#### VMH CLEANING ####
+# do transit day
+
+VMH_Raw[, DateTest := fifelse(data.table::as.ITime(Time) < Transit_Day_Cutoff
+                              , 1
+                              , 0
+                              ) #end fifelse()
+        ][
+          , Transit_Day := fifelse(DateTest == 1
+                                   , data.table::as.IDate(Time)-1
+                                   , data.table::as.IDate(Time)
+                                   )
+          ]
+gc()
+
+VMH_Raw[, jointime := Time]
+
+
+
+#clean up the columns to save space
+VMH_Raw[,c("DateTest"):=NULL]
+
+VMH_Raw[,Vehicle_ID := as.integer(Vehicle_ID)]
+
+
+
+
+
+gc()
+
+setkey(VMH_Raw, Vehicle_ID, Transit_Day, jointime)
+
+rolljointable_ips <- VMH_Raw[Transit_Day >= start_date & 
+                           Transit_Day <= end_date
+                         ][fb_ridership_ips[Transit_Day >= start_date & Transit_Day <= end_date]
+                           , on = c(Vehicle_ID = "Vehicle_ID"
+                                    , Transit_Day="Transit_Day"
+                                    , jointime = "jointime"
+                           )
+                           , roll=T
+                           , rollends = c(T, T)
+                           ] %>%
+  dplyr::select(VMH_Time = Time,
+                fb_Time = `Date (Local TIme)`,
+                jointime,
+                Vehicle_ID,
+                everything())
+
+#set max times
+#
+
+rolljointable_ips[VMH_Raw[, max(Time)
+                      , .(Vehicle_ID,Transit_Day)
+                      ]
+              , on = .(Vehicle_ID,Transit_Day)
+              ,`:=` (maxtime = V1)
+              ]
+
+
+#add timediffs
+rolljointable_ips[,timediffs := as.difftime(jointime - VMH_Time
+                                        ,units = "secs"
+)
+]
+
+rolljoin_one_each_ips <- rbind(
+  rolljointable_ips[rolljointable_ips[, .I[which.min(abs(timediffs))], `Validation Id`]$V1]
+  , rolljointable_ips[is.na(timediffs)]
+)
+
+#find how many TD's report after the final VMH, meaning a transaction after location reporting stopped
+fb_After_VMH_ips <- rolljoin_one_each_ips[jointime > maxtime+60*1.5]
+
+
+
+#find how many TD's are between start and end but have a large gap, here we've used 1.5 minutes, in seconds
+fb_gap_data_ips <- rolljoin_one_each_ips[(jointime < maxtime+60*1.5 & 
+                                    abs(timediffs) > 60*1.5) | is.na(timediffs)]
+
+
+#find how many TD's had bad GPS data
+fb_Bad_GPS_ips <- rolljoin_one_each_ips[GPSStatus != 2 | is.na(GPSStatus)
+                                ][jointime < maxtime+60*1.5
+                                  ][abs(timediffs) < 60*1.5][
+                                    !is.na(timediffs)
+                                    ]
+
+
+
+fb_Questionable_ips <- rbind(fb_After_VMH_ips,fb_gap_data_ips,fb_Bad_GPS_ips)
+
+fb_Questionable_PCT_ips <- fb_Questionable_ips[,.N/nrow(rolljoin_one_each_ips)]
+
+fb_Questionable_PCT_ips
+
+fb_Good_ips <- rolljoin_one_each_ips[!fb_Questionable_ips, on = c("Validation Id")]
+
+fb_Good_ips[,.N,Route]
+
+fb_Good_ips[Route == 0] %>%
+leaflet::leaflet() %>%
+leaflet::addCircles() %>%
+leaflet::addTiles()
+
+#crispus - mlk and 11th
+rolljoin_one_each_ips[Stop_Name %ilike% "mlk& 11th"] %>%
+leaflet::leaflet() %>%
+leaflet::addCircles() %>%
+leaflet::addTiles()
+
+
+# test some gps radius stuff ----------------------------------------------
+rolljoin_one_each_ips[Transit_Day == "2020-01-06" & Route == 15][order(jointime)]%>%
+leaflet::leaflet() %>%
+leaflet::addCircles() %>%
+leaflet::addTiles()
+
+
+# Get DimStop for Lat/Lon -------------------------------------------------
+
+con_dw <- DBI::dbConnect(odbc::odbc()
+                         , Driver = "SQL Server"
+                         , Server = "AVAILDWHP01VW"
+                         , Database = "DW_IndyGo"
+                         , Port = 1433)
+
+  
+DimStop <- dplyr::tbl(con_dw
+               , "DimStop"
+               ) %>%
+  dplyr::select(StopKey
+                ,StopExternalID
+                , StopReportLabel
+                , StopDesc
+                , Latitude
+                , Longitude
+                ) %>%
+  dplyr::collect() %>%
+  setDT(key = "StopKey")
+
+DimStop_just_one <- DimStop[DimStop[,.I[which.max(StopKey)],StopExternalID]$V1]
+
+DimStop[StopDesc %ilike% "Meridian St & 11"]
+# Crispus Attucks Stops ---------------------------------------------------
+#program Id is 13
+#weekday service type
+#stops are 50902, 51059, 51260
+
+Crispus_stops <- c(50902
+                   , 51059
+                   , 50901
+                   , 51260
+                   , 51347
+                   , 10143
+                   , 50390
+                   , 14207
+                   , 50905
+                   , 51056
+                   , 12108
+                   , 12112
+                   , 50005
+                   )
+
+
+DimStop_just_one[StopExternalID %in% Crispus_stops] %>%
+leaflet::leaflet() %>%
+leaflet::addCircles() %>%
+leaflet::addTiles()
+
+DimStop_just_one[StopExternalID %in% Crispus_stops] %>%
+  leaflet::leaflet() %>%
+  leaflet::addCircles() %>%
+  leaflet::addTiles()
+
+
+rolljoin_one_each_ips[`Program Id` == 13
+                      ][#filter some wacky shit in australia
+                        Longitude < -77.03
+                        ] %>%
+leaflet::leaflet() %>%
+leaflet::addCircles() %>%
+leaflet::addTiles()
+  
+  
+
+  
+
+
+
+RANN::nn2()
