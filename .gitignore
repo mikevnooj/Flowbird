@@ -6,3 +6,9 @@
 data/avail_nulls_20201116.csv
 
 data/
+
+*.png
+
+output/
+
+*.html
