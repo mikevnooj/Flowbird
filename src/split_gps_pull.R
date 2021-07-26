@@ -2,7 +2,7 @@ library(data.table)
 library(timeDate)
 library(magrittr)
 
-x <- fread("data//tableau_validations_20190901_to_20210405.csv")
+x <- data.table::fread("data//tableau_validations_20190901_to_20210629.csv")
 
 #get everything that counts as ridership
 fb_ridership <- x[
@@ -13,8 +13,6 @@ fb_ridership <- x[
         , Time := lubridate::mdy_hms(`Date (Local TIme)`)
         ][order(Time)
             ][!`Device External Id` %like% "ATB"]
-
-
 
 
 #do transit day
@@ -33,8 +31,24 @@ fb_ridership[, DateTest := fifelse(data.table::as.ITime(Time) < Transit_Day_Cuto
                                         )
                ]
 
-fb_ridership_2020 <- fb_ridership[Transit_Day >= "2020-01-01" & 
-                                    Transit_Day < "2021-01-01"]
+
+# Brooke Annual Questions -------------------------------------------------
+programs <- c(4,5,6,10,11,12,13,18,19,33,34,35,37,39)
+
+fb_ridership_schools <- fb_ridership[`Program Id` %in% programs]
+
+fb_ridership_schools[Transit_Day >= "2020-08-01" &
+                       Transit_Day <= "2021-08-01"]
+
+(55683-159000)/159000
+
+fb_ridership_schools[Transit_Day >= "2020-03-14"]
+
+fb_ridership_schools[Transit_Day >= "2021-05-21"]
+
+(7399-5000)/5000
+
+55683*.85
 
 
 #set service type
@@ -49,7 +63,7 @@ holidays_sunday <- holiday(2000:2025, holidays_sunday_service)
 holidays_saturday <- holiday(2000:2025, holidays_saturday_service)
 
 #set service type column
-fb_ridership_2020[
+fb_ridership_schools_2020[
   ,Service_Type := fcase(Transit_Day %in% as.IDate(holidays_saturday@Data)
                          , "Saturday"
                          , Transit_Day %in% as.IDate(holidays_sunday@Data)
@@ -1125,5 +1139,6 @@ Crispus_onboard_bell_time_plot <- Crispus_stops_bell_time_onboard %>%
 Crispus_onboard_bell_time_plot
 
 ggsave("KIPP_onboard_bell_time_plot.png")
+
 
 
